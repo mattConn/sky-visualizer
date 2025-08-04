@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Colorful Tunnel Visualizer</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #000;
+            overflow: hidden;
+            cursor: none;
+        }
+        canvas {
+            display: block;
+            background: white;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        
+        let mouseX = canvas.width / 2;
+        let mouseY = canvas.height / 2;
+        let time = 0;
+        let intensity = 1;
+        let ripples = [];
+        let tunnelSpeed = 1;
+        let targetTunnelSpeed = 1;
+        let birds = [];
+        let planes = [];
+        let skyImage = new Image();
+        let skyLoaded = false;
+        let planeImage = new Image();
+        let planeLoaded = false;
+        let fps = 0;
+        let lastTime = performance.now();
+        let frameCount = 0;
+        
+        skyImage.onload = function() {
+            skyLoaded = true;
+        };
+        skyImage.src = 'sky.png';
+        
+        planeImage.onload = function() {
+            planeLoaded = true;
+        };
+        planeImage.src = 'plane.png';
+        
+        class Ripple {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+                this.radius = 0;
+                this.maxRadius = 200;
+                this.alpha = 1;
+                this.hue = Math.random() * 360;
+            }
+            
+            update() {
+                this.radius += 8;
+                this.alpha = 1 - (this.radius / this.maxRadius);
+                return this.radius < this.maxRadius;
+            }
+            
+            draw() {
+                ctx.save();
+                ctx.globalAlpha = this.alpha * 0.3;
+                ctx.strokeStyle = `hsl(${this.hue}, 100%, 60%)`;
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.stroke();
+                ctx.restore();
+            }
+        }
+
+        class Bird {
+            constructor() {
+                this.reset();
+                this.wingPhase = Math.random() * Math.PI * 2;
+                this.flightPattern = Math.random() * Math.PI * 2;
+                this.speed = 0.5 + Math.random() * 0.3;
+            }
+            
+            reset() {
+                this.depth = 2000 + Math.random() * 500;
+                this.x = (Math.random() - 0.5) * 400;
+                this.y = (Math.random() - 0.5) * 300;
+                this.baseX = this.x;
+                this.baseY = this.y;
+            }
+            
+            update() {
+                // Move forward through tunnel
+                this.depth -= tunnelSpeed * 8 * this.speed;
+                
+                // Add flight pattern
+                this.wingPhase += 0.3;
+                this.flightPattern += 0.02;
+                this.x = this.baseX + Math.sin(this.flightPattern) * 50;
+                this.y = this.baseY + Math.cos(this.flightPattern * 0.7) * 30;
+                
+                // Reset when too close
+                if (this.depth < 50) {
+                    this.reset();
+                }
+            }
+            
+            draw() {
+                const centerX = canvas.width / 2;
+                const centerY = canvas.height / 2;
+                
+                // Calculate screen position and scale
+                const scale = Math.max(0.1, 400 / this.depth);
+                const alpha = Math.min(1, scale * 2);
+                
+                if (scale < 0.1) return;
+                
+                // Apply tunnel bending
+                const mouseInfluenceX = (mouseX - centerX) * 0.003;
+                const mouseInfluenceY = (mouseY - centerY) * 0.003;
+                const offsetX = mouseInfluenceX * (this.depth / 3);
+                const offsetY = mouseInfluenceY * (this.depth / 3);
+                
+                const screenX = centerX + this.x * scale + offsetX;
+                const screenY = centerY + this.y * scale + offsetY;
+                
+                // Draw simple bird shape
+                ctx.save();
+                ctx.globalAlpha = alpha;
+                ctx.fillStyle = 'white';
+                ctx.strokeStyle = 'rgba(200, 200, 200, 0.8)';
+                ctx.lineWidth = Math.max(0.5, scale);
+                
+                // Bird body (simple oval)
+                const bodyWidth = 8 * scale;
+                const bodyHeight = 4 * scale;
+                
+                ctx.beginPath();
+                ctx.ellipse(screenX, screenY, bodyWidth, bodyHeight, 0, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
+                
+                // Wings (animated)
+                const wingSpan = 12 * scale;
+                const wingFlap = Math.sin(this.wingPhase) * 0.3;
+                
+                ctx.beginPath();
+                // Left wing
+                ctx.moveTo(screenX - bodyWidth, screenY);
+                ctx.quadraticCurveTo(
+                    screenX - wingSpan, 
+                    screenY - wingSpan * (0.5 + wingFlap), 
+                    screenX - bodyWidth, 
+                    screenY - bodyHeight * 2
+                );
+                // Right wing
+                ctx.moveTo(screenX + bodyWidth, screenY);
+                ctx.quadraticCurveTo(
+                    screenX + wingSpan, 
+                    screenY - wingSpan * (0.5 + wingFlap), 
+                    screenX + bodyWidth, 
+                    screenY - bodyHeight * 2
+                );
+                ctx.stroke();
+                
+                ctx.restore();
+            }
+        }
+
+
+        class Plane {
+            constructor() {
+                this.reset();
+            }
+            
+            reset() {
+                this.y = canvas.height * 0.2 + Math.random() * canvas.height * 0.3; // Upper portion of screen
+                this.scale = 0.015 + Math.random() * 0.025; // Really tiny planes
+                this.speed = 0.1 + Math.random() * 0.2; // Much slower movement
+                this.flippedX = Math.random() < 0.5; // Random direction
+                
+                if (this.flippedX) {
+                    // Flying left to right
+                    this.x = -100;
+                    this.targetX = canvas.width + 100;
+                } else {
+                    // Flying right to left
+                    this.x = canvas.width + 100;
+                    this.targetX = -100;
+                }
+            }
+            
+            update() {
+                // Move towards target
+                const direction = this.flippedX ? 1 : -1;
+                this.x += direction * this.speed;
+                
+                // Reset when off screen
+                if ((this.flippedX && this.x > this.targetX) || (!this.flippedX && this.x < this.targetX)) {
+                    // Much more sporadic spawning - very low probability
+                    if (Math.random() < 0.0008) { // Even lower probability
+                        this.reset();
+                    }
+                }
+            }
+            
+            draw() {
+                if (!planeLoaded) return;
+                if ((this.flippedX && this.x < -50) || (!this.flippedX && this.x > canvas.width + 50)) return;
+                
+                ctx.save();
+                ctx.globalAlpha = 0.7; // Slightly more visible since it's tiny
+                
+                const drawWidth = planeImage.width * this.scale;
+                const drawHeight = planeImage.height * this.scale;
+                
+                ctx.translate(this.x, this.y);
+                if (this.flippedX) {
+                    ctx.scale(-1, 1); // Mirror for left-to-right flight
+                }
+                
+                ctx.drawImage(planeImage, -drawWidth / 2, -drawHeight / 2, drawWidth, drawHeight);
+                ctx.restore();
+            }
+        }
+
+        // Initialize birds
+        for (let i = 0; i < 8; i++) {
+            birds.push(new Bird());
+        }
+        
+        // Initialize planes (start with one)
+        planes.push(new Plane());
+        
+        function drawTunnel() {
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+            
+            // Mouse influence - make tunnel point toward mouse
+            const mouseInfluenceX = (mouseX - centerX) * 0.003;
+            const mouseInfluenceY = (mouseY - centerY) * 0.003;
+            
+            // Seamless infinite tunnel using modular arithmetic
+            const ringSpacing = 80;
+            const maxDepth = 2000;
+            
+            // Calculate offset for seamless loop
+            const timeOffset = (time * tunnelSpeed) % ringSpacing;
+            
+            // Draw tunnel rings with seamless looping
+            for (let z = 0; z < 25; z++) {
+                // Create seamless depth progression
+                const baseDepth = z * ringSpacing - timeOffset;
+                let depth = baseDepth;
+                
+                // Wrap depth to create infinite effect
+                if (depth <= 0) {
+                    depth = baseDepth + maxDepth;
+                }
+                
+                if (depth > 0 && depth < maxDepth) {
+                    const scale = Math.min(8, 800 / depth);
+                    const radius = 180 * scale;
+                    
+                    if (radius > 1 && radius < 600) {
+                        const segments = Math.max(8, Math.min(20, Math.floor(12 * scale)));
+                        
+                        // Color cycling based on original ring position for consistency
+                        const ringIndex = Math.floor(baseDepth / ringSpacing);
+                        const hueBase = (ringIndex * 30 + time * 0.5) % 360;
+                        
+                        // Pre-calculate mouse distance once per ring
+                        const mouseDist = Math.sqrt((mouseX - centerX) ** 2 + (mouseY - centerY) ** 2);
+                        const colorIntensity = Math.min(1.2, intensity * (1 + mouseDist * 0.0003));
+                        
+                        // Fade rings based on depth for infinite feel
+                        const depthFade = Math.max(0.1, 1 - (depth / maxDepth));
+                        const alpha = Math.min(0.9, scale * colorIntensity * depthFade * 0.7);
+                        
+                        ctx.save();
+                        ctx.globalAlpha = alpha;
+                        ctx.lineWidth = Math.max(1.2, scale * 3.5);
+                        
+                        for (let i = 0; i < segments; i++) {
+                            const angle = (i / segments) * Math.PI * 2;
+                            const nextAngle = ((i + 1) / segments) * Math.PI * 2;
+                            
+                            // Make tunnel bend toward mouse position based on depth
+                            const offsetX = mouseInfluenceX * (depth / 3);
+                            const offsetY = mouseInfluenceY * (depth / 3);
+                            
+                            const x1 = centerX + Math.cos(angle) * radius + offsetX;
+                            const y1 = centerY + Math.sin(angle) * radius + offsetY;
+                            const x2 = centerX + Math.cos(nextAngle) * radius + offsetX;
+                            const y2 = centerY + Math.sin(nextAngle) * radius + offsetY;
+                            
+                            // Enhanced color variation with more brightness and glow
+                            const segmentHue = (hueBase + i * 18 + mouseDist * 0.03) % 360;
+                            const brightness = Math.min(90, 40 + colorIntensity * 50 + depthFade * 25);
+                            const saturation = Math.min(100, 85 + colorIntensity * 15);
+                            
+                            ctx.strokeStyle = `hsl(${segmentHue}, ${saturation}%, ${brightness}%)`;
+                            
+                            ctx.beginPath();
+                            ctx.moveTo(x1, y1);
+                            ctx.lineTo(x2, y2);
+                            ctx.stroke();
+                        }
+                        ctx.restore();
+                    }
+                }
+            }
+            
+            // Floating particles that follow tunnel direction
+            for (let i = 0; i < 10; i++) {
+                const particleSpeed = 2 + (i % 3);
+                const particleTime = time * particleSpeed + i * 200;
+                
+                // Particle depth that cycles infinitely
+                const particleDepth = ((particleTime * 5) % 1500) + 200;
+                const particleScale = 400 / particleDepth;
+                
+                if (particleScale > 0.1) {
+                    const angle = particleTime * 0.01 + i * 0.8;
+                    const orbitRadius = 150 + Math.sin(particleTime * 0.005) * 100;
+                    
+                    // Apply tunnel bending to particles based on their depth
+                    const particleOffsetX = mouseInfluenceX * (particleDepth / 3);
+                    const particleOffsetY = mouseInfluenceY * (particleDepth / 3);
+                    
+                    const x = centerX + Math.cos(angle) * orbitRadius * particleScale + particleOffsetX;
+                    const y = centerY + Math.sin(angle) * orbitRadius * particleScale + particleOffsetY;
+                    const size = (Math.sin(particleTime * 0.02) * 2 + 4) * particleScale;
+                    
+                    const hue = (particleTime * 0.5 + i * 60) % 360;
+                    const alpha = Math.min(0.9, particleScale * intensity * 0.8);
+                    
+                    ctx.save();
+                    ctx.globalAlpha = alpha;
+                    ctx.fillStyle = `hsl(${hue}, 95%, 75%)`;
+                    
+                    ctx.beginPath();
+                    ctx.arc(x, y, size, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.restore();
+                }
+            }
+        }
+        
+        function drawMovingClouds() {
+            if (!skyLoaded) return;
+            
+            ctx.save();
+            
+            // Create moving cloud effect with dissolve
+            const cloudSpeed = 0.5;
+            const dissolveSpeed = 0.3;
+            
+            // Get tunnel direction from mouse position
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+            const mouseInfluenceX = (mouseX - centerX) * 0.001;
+            const mouseInfluenceY = (mouseY - centerY) * 0.001;
+            
+            // Draw sky background moving with tunnel direction
+            const offsetX1 = (time * cloudSpeed) % canvas.width + mouseInfluenceX * time * 0.5;
+            const offsetY1 = Math.sin(time * 0.01) * 20 + mouseInfluenceY * time * 0.5;
+            const offsetX2 = ((time * cloudSpeed * 0.7) + canvas.width * 0.3) % canvas.width + mouseInfluenceX * time * 0.3;
+            const offsetY2 = Math.cos(time * 0.008) * 15 + mouseInfluenceY * time * 0.3;
+            
+            // Calculate larger dimensions to ensure full coverage
+            const imgWidth = canvas.width * 1.5;
+            const imgHeight = canvas.height * 1.5;
+            
+            // First layer with dissolve effect
+            ctx.globalAlpha = 0.3 + Math.sin(time * dissolveSpeed * 0.02) * 0.1;
+            ctx.drawImage(skyImage, -offsetX1 - imgWidth * 0.25, offsetY1 - imgHeight * 0.25, imgWidth, imgHeight);
+            ctx.drawImage(skyImage, canvas.width - offsetX1 - imgWidth * 0.25, offsetY1 - imgHeight * 0.25, imgWidth, imgHeight);
+            ctx.drawImage(skyImage, -offsetX1 - imgWidth * 0.25, offsetY1 + canvas.height - imgHeight * 0.25, imgWidth, imgHeight);
+            ctx.drawImage(skyImage, canvas.width - offsetX1 - imgWidth * 0.25, offsetY1 + canvas.height - imgHeight * 0.25, imgWidth, imgHeight);
+            
+            // Second layer for depth
+            ctx.globalAlpha = 0.2 + Math.cos(time * dissolveSpeed * 0.015) * 0.08;
+            ctx.drawImage(skyImage, -offsetX2 - imgWidth * 0.25, offsetY2 - imgHeight * 0.25, imgWidth, imgHeight);
+            ctx.drawImage(skyImage, canvas.width - offsetX2 - imgWidth * 0.25, offsetY2 - imgHeight * 0.25, imgWidth, imgHeight);
+            ctx.drawImage(skyImage, -offsetX2 - imgWidth * 0.25, offsetY2 + canvas.height - imgHeight * 0.25, imgWidth, imgHeight);
+            ctx.drawImage(skyImage, canvas.width - offsetX2 - imgWidth * 0.25, offsetY2 + canvas.height - imgHeight * 0.25, imgWidth, imgHeight);
+            
+            ctx.restore();
+        }
+        
+        
+        function updateFPS() {
+            frameCount++;
+            const currentTime = performance.now();
+            
+            if (currentTime - lastTime >= 1000) {
+                fps = Math.round((frameCount * 1000) / (currentTime - lastTime));
+                frameCount = 0;
+                lastTime = currentTime;
+            }
+        }
+        
+        function drawFPS() {
+            ctx.save();
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+            ctx.font = '16px monospace';
+            ctx.textAlign = 'right';
+            ctx.fillText(`FPS: ${fps}`, canvas.width - 10, canvas.height - 10);
+            ctx.restore();
+        }
+        
+        function animate() {
+            updateFPS();
+            
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            drawMovingClouds();
+            drawTunnel();
+            
+            // Update and draw birds
+            for (let i = 0; i < birds.length; i++) {
+                birds[i].update();
+                birds[i].draw();
+            }
+            
+            // Update and draw planes
+            for (let i = 0; i < planes.length; i++) {
+                planes[i].update();
+                planes[i].draw();
+            }
+            
+            // Update and draw ripples
+            for (let i = ripples.length - 1; i >= 0; i--) {
+                if (!ripples[i].update()) {
+                    ripples.splice(i, 1);
+                } else {
+                    ripples[i].draw();
+                }
+            }
+            
+            // Update tunnel speed smoothly
+            tunnelSpeed += (targetTunnelSpeed - tunnelSpeed) * 0.05;
+            
+            drawFPS();
+            
+            time++;
+            intensity = Math.max(1, intensity * 0.995); // Gradual decay
+            
+            requestAnimationFrame(animate);
+        }
+        
+        // Mouse events
+        canvas.addEventListener('mousemove', (e) => {
+            mouseX = e.clientX;
+            mouseY = e.clientY;
+            
+            // Add ripple occasionally on movement
+            if (Math.random() < 0.1) {
+                ripples.push(new Ripple(mouseX, mouseY));
+            }
+            
+            intensity = Math.min(3, intensity + 0.1);
+        });
+        
+        canvas.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            
+            // Scroll wheel controls tunnel speed
+            const scrollDelta = e.deltaY * -0.01; // Invert and scale
+            targetTunnelSpeed = Math.max(0.1, Math.min(5, targetTunnelSpeed + scrollDelta));
+            
+            // Add visual feedback
+            intensity = Math.min(5, intensity + Math.abs(scrollDelta) * 2);
+        });
+        
+        // Resize handler
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        });
+        
+        animate();
+    </script>
+</body>
+</html>
